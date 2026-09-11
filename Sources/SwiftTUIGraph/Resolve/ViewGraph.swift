@@ -1109,6 +1109,16 @@ package final class ViewGraph {
     var path = [identity]
     var visited: Set<Identity> = [identity]
     var node = nodeIfExists(for: identity)
+    // Hosted controls can publish synthetic focus identities without graph nodes. Their
+    // structural prefixes still lead to the live container that owns consumer handlers.
+    var structuralIdentity = identity.parent
+    while node == nil, let candidate = structuralIdentity, path.count < limit {
+      if visited.insert(candidate).inserted {
+        path.append(candidate)
+      }
+      node = nodeIfExists(for: candidate)
+      structuralIdentity = candidate.parent
+    }
     while let current = node, path.count < limit {
       if visited.insert(current.identity).inserted {
         path.append(current.identity)

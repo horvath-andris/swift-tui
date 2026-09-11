@@ -444,6 +444,25 @@ struct KeyCommandDispatchTests {
     #expect(surfaceText.contains("Open"))
     #expect(!surfaceText.contains("detail"))
   }
+
+  @Test("onKeyPress attached to List receives keys while a synthetic row has focus")
+  func listConsumerHandlerReceivesFocusedRowKeys() throws {
+    let fired = Counter()
+    let runLoop = makeRunLoop {
+      List(selection: .constant(0)) {
+        Text("row").tag(0)
+      }
+      .onKeyPress(.character("a")) { _ in
+        fired.increment()
+        return .handled
+      }
+    }
+    try renderInitial(runLoop)
+
+    #expect(runLoop.focusTracker.currentFocusIdentity?.description.contains("ListRow[0]") == true)
+    _ = runLoop.handle(.input(.key(.character("a"))))
+    #expect(fired.count == 1)
+  }
 }
 
 @MainActor
