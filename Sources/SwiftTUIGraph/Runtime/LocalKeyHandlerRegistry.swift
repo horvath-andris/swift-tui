@@ -56,10 +56,43 @@ public enum KeyEvent: Equatable, Hashable, Sendable {
   case functionKey(Int)
 }
 
+package enum KeyPressDispatchOutcome: Equatable, Sendable {
+  case ignored
+  case handled
+  case stopPropagation
+
+  package var stopsPropagation: Bool {
+    switch self {
+    case .ignored:
+      false
+    case .handled, .stopPropagation:
+      true
+    }
+  }
+
+  package var preventsDefault: Bool {
+    self == .handled
+  }
+}
+
 @MainActor
 package final class LocalKeyHandlerRegistry: Equatable {
   package typealias KeyPressHandler = @MainActor (KeyPress) -> Bool
+  package typealias KeyPressOutcomeHandler = @MainActor (KeyPress) -> KeyPressDispatchOutcome
   package typealias PasteHandler = @MainActor (String) -> Bool
+
+  package struct KeyPressRegistration {
+    package let receivesSyntheticBubbles: Bool
+    package let handler: KeyPressOutcomeHandler
+
+    package init(
+      receivesSyntheticBubbles: Bool = true,
+      handler: @escaping KeyPressOutcomeHandler
+    ) {
+      self.receivesSyntheticBubbles = receivesSyntheticBubbles
+      self.handler = handler
+    }
+  }
 
   /// One contributing owner's stacked handlers plus the persisted ordinal of
   /// the bucket's first registration. The ordinal — not the owner's
@@ -103,7 +136,7 @@ package final class LocalKeyHandlerRegistry: Equatable {
     }
   }
 
-  private var keyPressHandlers: [Identity: ContributedHandlers<KeyPressHandler>] = [:]
+  private var keyPressHandlers: [Identity: ContributedHandlers<KeyPressRegistration>] = [:]
   private var pasteHandlers: [Identity: ContributedHandlers<PasteHandler>] = [:]
   private var ownersByIdentity: [Identity: RuntimeRegistrationOwnerKey] = [:]
   /// Monotonic mint for ``ContributedBucket/ordinal``. Never reset: ordinals
@@ -121,19 +154,38 @@ package final class LocalKeyHandlerRegistry: Equatable {
 
   package func register(
     identity: Identity,
+    receivesSyntheticBubbles: Bool = true,
     keyPressHandler: @escaping KeyPressHandler
   ) {
+    registerOutcome(
+      identity: identity,
+      receivesSyntheticBubbles: receivesSyntheticBubbles,
+      keyPressHandler: { keyPress in
+        keyPressHandler(keyPress) ? .handled : .ignored
+      }
+    )
+  }
+
+  package func registerOutcome(
+    identity: Identity,
+    receivesSyntheticBubbles: Bool = true,
+    keyPressHandler: @escaping KeyPressOutcomeHandler
+  ) {
+    let registration = KeyPressRegistration(
+      receivesSyntheticBubbles: receivesSyntheticBubbles,
+      handler: keyPressHandler
+    )
     let owner = RuntimeRegistrationOwnerKey.current(identity: identity)
     let ordinal =
       keyPressHandlers[identity]?.byOwner[owner]?.ordinal ?? claimContributionOrdinal()
     keyPressHandlers[identity, default: .init()]
       .byOwner[owner, default: ContributedBucket(ordinal: ordinal, handlers: [])]
-      .handlers.append(keyPressHandler)
+      .handlers.append(registration)
     ownersByIdentity[identity] = owner
     ViewNodeContext.current?.recordKeyPressHandlerRegistration(
       identity: identity,
       ordinal: ordinal,
-      handler: keyPressHandler
+      registration: registration
     )
   }
 
@@ -165,15 +217,33 @@ package final class LocalKeyHandlerRegistry: Equatable {
     identity: Identity,
     keyPress: KeyPress
   ) -> Bool {
+    dispatchOutcome(
+      identity: identity,
+      keyPress: keyPress,
+      isSyntheticBubble: false
+    ).stopsPropagation
+  }
+
+  package func dispatchOutcome(
+    identity: Identity,
+    keyPress: KeyPress,
+    isSyntheticBubble: Bool
+  ) -> KeyPressDispatchOutcome {
     guard let contributions = keyPressHandlers[identity] else {
-      return false
+      return .ignored
     }
-    for handler in contributions.flattened.reversed() {
-      if handler(keyPress) {
-        return true
+    for registration in contributions.flattened.reversed() {
+      if isSyntheticBubble,
+        !registration.receivesSyntheticBubbles
+      {
+        continue
+      }
+      let outcome = registration.handler(keyPress)
+      if outcome.stopsPropagation {
+        return outcome
       }
     }
-    return false
+    return .ignored
   }
 
   @discardableResult
@@ -239,7 +309,7 @@ package final class LocalKeyHandlerRegistry: Equatable {
     }
   }
 
-  package func snapshotKeyPressHandlers() -> [Identity: [KeyPressHandler]] {
+  package func snapshotKeyPressHandlers() -> [Identity: [KeyPressRegistration]] {
     keyPressHandlers.mapValues(\.flattened)
   }
 
@@ -248,7 +318,7 @@ package final class LocalKeyHandlerRegistry: Equatable {
   }
 
   package func restoreKeyPressHandlers(
-    _ snapshot: [Identity: [KeyPressHandler]],
+    _ snapshot: [Identity: [KeyPressRegistration]],
     ownersByIdentity: [Identity: RuntimeRegistrationOwnerKey] = [:],
     ordinalsByIdentity: [Identity: UInt64] = [:]
   ) {

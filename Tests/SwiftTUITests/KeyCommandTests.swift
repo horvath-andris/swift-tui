@@ -444,6 +444,69 @@ struct KeyCommandDispatchTests {
     #expect(surfaceText.contains("Open"))
     #expect(!surfaceText.contains("detail"))
   }
+
+  @Test("List rows bubble consumer keys without double-dispatching navigation")
+  func listConsumerHandlerReceivesFocusedRowKeys() throws {
+    let model = ListSelectionModel()
+    let runLoop = makeRunLoop {
+      List(selection: Binding(get: { model.selection }, set: { model.selection = $0 })) {
+        ForEach(0..<3) { index in
+          Text("row \(index)").tag(index)
+        }
+      }
+      .onKeyPress(.space) { _ in
+        model.receivedKeyCount += 1
+        return .handled
+      }
+    }
+    try renderInitial(runLoop)
+
+    #expect(runLoop.focusTracker.currentFocusIdentity?.description.contains("ListRow[0]") == true)
+    _ = runLoop.handle(.input(.key(.space)))
+    #expect(model.receivedKeyCount == 1)
+
+    _ = runLoop.handle(.input(.key(.arrowDown)))
+    #expect(model.selection == 1)
+    #expect(runLoop.focusTracker.currentFocusIdentity?.description.contains("ListRow[1]") == true)
+  }
+
+  @Test("List row navigation completes before ancestor key handlers")
+  func listRowNavigationPrecedesConsumerHandler() throws {
+    let model = ListSelectionModel()
+    let runLoop = makeRunLoop {
+      List(selection: Binding(get: { model.selection }, set: { model.selection = $0 })) {
+        Text("row 0").tag(0)
+        Text("separator")
+        Text("row 1").tag(1)
+        Text("row 2").tag(2)
+      }
+      .onKeyPress(.arrowDown) { _ in
+        model.receivedArrowCount += 1
+        return .handled
+      }
+    }
+    try renderInitial(runLoop)
+
+    #expect(runLoop.focusTracker.currentFocusIdentity?.description.contains("ListRow[0]") == true)
+    _ = runLoop.handle(.input(.key(.arrowDown)))
+
+    #expect(model.receivedArrowCount == 0)
+    #expect(model.selection == 1)
+    #expect(runLoop.focusTracker.currentFocusIdentity?.description.contains("ListRow[2]") == true)
+
+    let lastRow = try #require(
+      runLoop.focusTracker.focusRegions.first {
+        $0.identity.description.contains("ListRow[3]")
+      }?.identity
+    )
+    _ = runLoop.focusTracker.setFocus(to: lastRow)
+    model.selection = 2
+    _ = runLoop.handle(.input(.key(.arrowDown)))
+
+    #expect(model.receivedArrowCount == 1)
+    #expect(model.selection == 2)
+    #expect(runLoop.focusTracker.currentFocusIdentity == lastRow)
+  }
 }
 
 @MainActor
@@ -497,6 +560,13 @@ private func renderInitial<State, V: View>(_ runLoop: RunLoop<State, V>) throws 
 final class Counter {
   private(set) var count = 0
   func increment() { count += 1 }
+}
+
+@MainActor
+private final class ListSelectionModel {
+  var selection = 0
+  var receivedKeyCount = 0
+  var receivedArrowCount = 0
 }
 
 @MainActor
