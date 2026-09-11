@@ -75,24 +75,30 @@ extension RunLoop {
   }
 
   /// Dispatches `keyPress` to the focused identity's handlers and then up its
-  /// hosting chain, stopping at the first handler that consumes it. Returns
-  /// `true` when the event was consumed. The dispatch backstop is requested
-  /// only in that case: an unhandled key gets none (see the caller).
+  /// hosting chain, stopping when a handler prevents further propagation. The
+  /// outcome separately controls whether the runtime's default action runs.
+  /// The dispatch backstop is requested only when propagation stops: an
+  /// unhandled key gets none (see the caller).
   private func dispatchKeyPressAlongBubblePath(
     _ keyPress: KeyPress,
     from focusedIdentity: Identity
-  ) -> Bool {
+  ) -> KeyPressDispatchOutcome {
     let invalidationGenerationBeforeDispatch = schedulerInvalidationRequestGeneration()
+    let focusedTargetIsSynthetic = !renderer.viewGraph.containsNode(for: focusedIdentity)
     for identity in renderer.viewGraph.keyEventBubblePath(from: focusedIdentity)
     where localKeyHandlerRegistry.hasHandler(identity: identity) {
-      if localKeyHandlerRegistry.dispatch(identity: identity, keyPress: keyPress) {
-        requestDispatchBackstopInvalidation(
-          schedulerInvalidationGenerationBeforeDispatch: invalidationGenerationBeforeDispatch
-        )
-        return true
-      }
+      let outcome = localKeyHandlerRegistry.dispatchOutcome(
+        identity: identity,
+        keyPress: keyPress,
+        isSyntheticBubble: focusedTargetIsSynthetic && identity != focusedIdentity
+      )
+      guard outcome.stopsPropagation else { continue }
+      requestDispatchBackstopInvalidation(
+        schedulerInvalidationGenerationBeforeDispatch: invalidationGenerationBeforeDispatch
+      )
+      return outcome
     }
-    return false
+    return .ignored
   }
 
   package func handleKeyPress(
@@ -149,7 +155,7 @@ extension RunLoop {
     // binding.
     if focusedInteractions == .edit, exitKeyBindings.contains(keyPress) {
       if !keyPress.modifiers.isEmpty, let focusedIdentity,
-        dispatchKeyPressAlongBubblePath(keyPress, from: focusedIdentity)
+        dispatchKeyPressAlongBubblePath(keyPress, from: focusedIdentity).preventsDefault
       {
         return nil
       }
@@ -174,8 +180,11 @@ extension RunLoop {
     // backstop — a declined ESC previously root-swept here before the
     // framework dismiss branch even ran, riding the close transition's
     // replayed sets as `root_invalidated`.
-    if let focusedIdentity, dispatchKeyPressAlongBubblePath(keyPress, from: focusedIdentity) {
-      return nil
+    if let focusedIdentity {
+      let outcome = dispatchKeyPressAlongBubblePath(keyPress, from: focusedIdentity)
+      if outcome.preventsDefault {
+        return nil
+      }
     }
 
     // Configured exit bindings are the fallback after focused view handlers.

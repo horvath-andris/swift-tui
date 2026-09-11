@@ -1629,13 +1629,13 @@ package final class ViewNode {
   package func recordKeyPressHandlerRegistration(
     identity: Identity,
     ordinal: UInt64,
-    handler: @escaping LocalKeyHandlerRegistry.KeyPressHandler
+    registration: LocalKeyHandlerRegistry.KeyPressRegistration
   ) {
     recordRuntimeRegistrationMutation()
     registeredHandlers.recordKeyPressHandler(
       identity: identity,
       ordinal: ordinal,
-      handler: handler
+      registration: registration
     )
     refreshCommittedHandlerInventoryOutsideCapture()
   }

@@ -223,7 +223,10 @@ extension List {
         }
       }
 
-      intake.registerKeyPressHandler(identity: context.identity) { keyPress in
+      intake.registerKeyPressHandler(
+        identity: context.identity,
+        receivesSyntheticBubbles: false
+      ) { keyPress in
         guard keyPress.modifiers.isEmpty else {
           return false
         }
@@ -304,9 +307,9 @@ extension List {
           intake.registerAction(identity: rowIdentity) {
             policy.isMultiple ? policy.toggle(tag) : activate(tag)
           }
-          intake.registerKeyPressHandler(identity: rowIdentity) { keyPress in
+          intake.registerKeyPressOutcomeHandler(identity: rowIdentity) { keyPress in
             guard keyPress.modifiers.isEmpty else {
-              return false
+              return .ignored
             }
             let delta: Int?
             switch keyPress.key {
@@ -319,29 +322,27 @@ extension List {
             }
 
             guard let delta, !rows.isEmpty else {
-              return false
+              return .ignored
             }
 
-            let targetIndex = min(
-              max(rowIndex + delta, rows.startIndex),
-              rows.index(before: rows.endIndex)
-            )
-            guard let targetTag = rows[targetIndex].tag else {
-              return false
-            }
-            if !policy.isMultiple {
-              _ = policy.select(targetTag)
+            guard policy.step(orderedTags: rows.compactMap(\.tag), delta: delta) else {
+              return .ignored
             }
             if let scrollCurrency {
-              // This handler owns the common case: with focus on a row, the
-              // row's own handler sees the arrow and the container's never
-              // does. Pin before revealing — while nothing is stored the
-              // window IS the selection, so a minimal reveal would just be
-              // re-centred by the fallback underneath it.
+              // Pin before revealing — while nothing is stored the window IS
+              // the selection, so a minimal reveal would just be re-centred
+              // by the fallback underneath it.
               scrollCurrency.pinCurrentAnchor()
-              scrollCurrency.reveal(row: targetIndex)
+              if let selectedRow = rows.firstIndex(where: { row in
+                row.tag.map(policy.contains) == true
+              }) {
+                scrollCurrency.reveal(row: selectedRow)
+              }
             }
-            return false
+            // Selection is the row handler's work; focus movement remains the
+            // runtime's default arrow action. Stop ancestors from splitting
+            // those two phases without making List own focus traversal.
+            return .stopPropagation
           }
         }
       }
